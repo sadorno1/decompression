@@ -120,62 +120,21 @@ else
 
   %%
   h_fig = figure(1); clf(h_fig); set(h_fig,'WindowStyle','docked');
-  plot(real(data{4}))
+  plot(real(data{4}), 'g')
   hold on;
   plot(real(data_in{4}) .* max(abs(real(data{4}))) ./ max(abs(real(data_in{4})))  )
   grid on;
 
   train_input = data_in{4}(1590:11605);
-  train_output = data{4}(1590:11605);
+  train_output = data{4}(1590:11605);  %original waveform
 
-  t = linspace(0, 1, 512);
-
-  % Parameters
-  N = 10016;         % number of waveforms
-  fs = 512;        % samples per waveform
-  T = 1;           % total time or depth
-  t = linspace(0, T, fs);  % time/depth axis
-
-  % Preallocate datasets
-  original_dataset = zeros(N, fs);
-  distorted_dataset = zeros(N, fs);
-  distortion_mask = zeros(N, fs);  % 1 where distortion occurred (|x| > threshold)
-
-  % Threshold where amplifier distortion kicks in
-  threshold = 1;
-
-  for i = 1:N
-      % Random signal params
-      f = 5 + rand()*10;                  % frequency between 5–15 Hz
-      amp = 1.0 + rand()*2;               % amplitude between 1.0–3.0
-      phase = 2*pi*rand();                % phase shift
-      noise = 0.1 * randn(1, fs);         % Gaussian noise
-
-      % Base waveform
-      waveform = amp * sin(2*pi*f*t + phase);
-
-      % Envelope (Gaussian pulse)
-      pulse_center = rand();
-      pulse_width = 0.1 + rand()*0.2;
-      envelope = exp(-((t - pulse_center).^2) / (2*pulse_width^2));
-
-      % Combine and add noise
-      y_original = waveform .* envelope + noise;
-
-      % Apply tanh-based distortion beyond threshold
-      y_distorted = y_original;
-      mask = abs(y_original) > threshold;
-      y_distorted(mask) = tanh(y_original(mask));
-
-      % Store
-      original_dataset(i, :) = y_original;
-      distorted_dataset(i, :) = y_distorted;
-      distortion_mask(i, :) = mask;
-  end
+  Nt = length(train_input);
+  train_input = interpft(train_input,Nt*2);
+  train_input_real = cos
 
 end
 
 % Save to .mat file
 cd('/home/k051m093/Documents/radar_cresis/radar_cresis/data/')
-save('compression_data_output.mat', 'train_output', 'train_input', 'distortion_mask', 't');
+save('compression_data_output.mat', 'train_output', 'train_input');
 disp('Saved distorted radar dataset to compression_data_output.mat');

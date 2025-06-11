@@ -125,15 +125,24 @@ else
   plot(real(data_in{4}) .* max(abs(real(data{4}))) ./ max(abs(real(data_in{4})))  )
   grid on;
 
-  train_input = data_in{4}(1590:11605);
-  train_output = data{4}(1590:11605);  %original waveform
+  train_input = data_in{4}(1590:11605,1);
+  train_output = data{4}(1590:11605,1);  %original waveform
 
-  train
-
+  Nt = length(train_input);
+  Mt = 2;
+  Nt_new = Nt*Mt;
+  train_input = interpft(train_input,Nt_new);
+  train_output = interpft(train_output,Nt_new);
+  fs = 500e6 * Mt;
+  dt = 1/fs;
+  fc = 750e6;
+  time = dt * (0:Nt_new-1).';
+  train_input_real = real(train_input) .* cos(2*pi*fc*time) - imag(train_input) .* sin(2*pi*fc*time);
+  train_output_real = real(train_output) .* cos(2*pi*fc*time) - imag(train_output) .* sin(2*pi*fc*time);
 
 end
 
 % Save to .mat file
 cd('/home/k051m093/Documents/radar_cresis/radar_cresis/data/')
-save('compression_data_output.mat', 'train_output', 'train_input');
+save('compression_data_output.mat', 'train_output_real', 'train_input_real');
 disp('Saved distorted radar dataset to compression_data_output.mat');
