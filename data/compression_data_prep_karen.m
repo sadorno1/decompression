@@ -139,10 +139,20 @@ else
   time = dt * (0:Nt_new-1).';
   train_input_real = real(train_input) .* cos(2*pi*fc*time) - imag(train_input) .* sin(2*pi*fc*time);
   train_output_real = real(train_output) .* cos(2*pi*fc*time) - imag(train_output) .* sin(2*pi*fc*time);
+  
+  h_fig = figure(2); clf(h_fig); set(h_fig,'WindowStyle','docked');
+  plot(train_input_real, 'g')
+  hold on;
+  plot(train_output_real)
+  grid on;
+
+  
+
+
 
 end
 
 % Save to .mat file
-cd('/home/k051m093/Documents/radar_cresis/radar_cresis/data/')
+cd('/home/k051m093/Documents/Signal_neural_network/data/')
 save('compression_data_output.mat', 'train_output_real', 'train_input_real');
 disp('Saved distorted radar dataset to compression_data_output.mat');
