@@ -146,13 +146,9 @@ else
   plot(train_output_real)
   grid on;
 
-  
-
-
-
 end
 
 % Save to .mat file
 cd('/home/k051m093/Documents/Signal_neural_network/data/')
 save('compression_data_output.mat', 'train_output_real', 'train_input_real');
-disp('Saved distorted radar dataset to compression_data_output.mat');
+disp('Saved dataset to compression_data_output.mat');
