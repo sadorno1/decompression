@@ -1,0 +1,30 @@
+
+hchirp = dsp.Chirp( ...
+    'InitialFrequency', 0,...
+    'TargetFrequency', 10, ...
+    'TargetTime', 10, ...
+    'SweepTime', 100, ...
+    'SampleRate', 50, ...
+    'SamplesPerFrame', 1000);
+
+chirpData = (step(hchirp))';
+evenFlag = mod(minute(datetime('now')),2);
+if evenFlag
+    chirpData = fliplr(chirpData);
+end
+
+plot(X_chirpData);
+
+y
+h_fig = figure(2); clf(h_fig); set(h_fig,'WindowStyle','docked');
+plot(train_input_real, 'g')
+hold on;
+plot(train_output_real)
+grid on;
+legend('train input real', 'train output real');
+
+
+% Save to .mat file
+cd('/home/k051m093/Documents/Signal_neural_network/data/')
+save('sim_data_out.mat', 'X_chirpData');
+disp('Saved dataset to sim_data_out.mat');
