@@ -1,0 +1,19 @@
+h_fig = figure(1); clf(h_fig); set(h_fig,'WindowStyle','docked');
+plot(x_train, 'b')
+grid on;
+plot(y_train, 'o')
+grid on;
+plot(train_predictions, 'g')
+hold on;
+legend('X_train', 'y_train', 'train predictions');
+
+
+
+h_fig = figure(2); clf(h_fig); set(h_fig,'WindowStyle','docked');
+plot(x_test, 'b')
+grid on;
+plot(y_test, 'o')
+grid on;
+plot(predictions, 'g')
+hold on;
+legend('X_test', 'y_test', 'predictions');
