@@ -1,6 +1,5 @@
 # %%
 import os
-import glob
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -15,11 +14,11 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 # ══════════════════════════════════════════════════════════════════════════════
 # FINAL MODEL CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
-#MAT_PATH = "data/compression_data_output.mat"
+MAT_PATH = "data/compression_data_output.mat"
 #MAT_PATH = "data/compression_data_april8.mat"
 #MAT_PATH = "data/compression_data_combined.mat"
-#MAT_PATH = "data/compression_data_combined_v2.mat"
-MAT_PATH = "data/compression_data_logdelay.mat"
+
+
 WINDOW   = 16
 
 # Best ensemble from your size sweep:
@@ -51,8 +50,9 @@ EXCERPT_WIN = 80
 # Output folder
 #OUTDIR = "data"
 #OUTDIR = "data/april8_results"
-OUTDIR   = "data/logdelay_results"
+OUTDIR   = "data/combined_results"
 #OUTDIR   = "data/april8_retrained"
+
 
 os.makedirs(OUTDIR, exist_ok=True)
 
@@ -82,10 +82,9 @@ PANEL_2C = 6.8
 
 COLOR_ACT = "#1a1a2e"   # actual
 COLOR_PRD = "#e84545"   # predicted
-COLOR_CMP = "#2e86ab"   # compressed input
+COLOR_CMP = "#2e86ab"   # compressed input  (was COLOR_ATT)
 COLOR_RES = "#f18f01"   # residual / error
 COLOR_ENV = "#6a4c93"
-COLOR_STD = "#2ecc71"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HELPERS
@@ -194,6 +193,10 @@ def envelope_relative_error(env_true, y_true, y_pred, floor_frac=0.01):
         rel_err(t) = |y_pred(t) - y_true(t)| / max(A_true(t), ε)
 
     where  A_true = |hilbert(y_true)|  and  ε = floor_frac * max(A_true).
+
+    This measures how large the pointwise prediction error is relative to
+    the local signal amplitude, rather than comparing envelope estimates
+    directly.
     """
     env_true = np.ravel(env_true)
     y_true   = np.ravel(y_true)
@@ -230,8 +233,7 @@ def find_segment_by_envelope(env, lo, hi, win=80, n=500):
 print("Training best ensemble (N = 3 models) ...")
 data = prepare_data(MAT_PATH, WINDOW)
 
-ens_preds  = []
-ens_models = []   # <-- save trained models for inference on new data
+ens_preds = []
 loss_curves = []
 
 for i, arch in enumerate(TOP_ARCHS):
@@ -247,7 +249,6 @@ for i, arch in enumerate(TOP_ARCHS):
     yhat = np.ravel(unscale(yhat_s, data))
 
     ens_preds.append(yhat)
-    ens_models.append(mlp)   # <-- save model
     loss_curves.append(mlp.loss_curve_)
 
 yt  = np.ravel(unscale(data["y_test"], data))   # actual target
@@ -548,7 +549,7 @@ fig7.savefig(os.path.join(OUTDIR, "fig7_predicted_vs_actual_envelope.png"), dpi=
 
 plt.show()
 
-print("\nDone. All figures saved to", OUTDIR)
+print("\nDone. All figures saved to data/")
 print("  fig1_predicted_vs_actual.png")
 print("  fig2_residual_vs_envelope.png")
 print("  fig3_error_distribution.png")
@@ -561,46 +562,127 @@ print("  fig7_predicted_vs_actual_envelope.png")
 # ══════════════════════════════════════════════════════════════════════════════
 # EXTRA FIGURES: Ensemble Disagreement + Spectrogram Comparison
 # ══════════════════════════════════════════════════════════════════════════════
+# Drop this file next to your main script. It assumes the following variables
+# are already in scope (produced by your main training script):
+#
+#   ens_preds   : list of 3 arrays, each shape (N,)  — individual model outputs
+#   yp          : array (N,)  — ensemble mean prediction
+#   yt          : array (N,)  — actual target (unscaled)
+#   xc          : array (N,)  — compressed input (unscaled, current sample)
+#   env_true    : array (N,)  — analytic envelope of yt
+#   rel_err_pct : array (N,)  — per-sample relative error (%) from main script
+#
+# If running standalone, re-run your main script first so these exist,
+# then execute this file in the same kernel / session.
+# ══════════════════════════════════════════════════════════════════════════════
+
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from matplotlib.ticker import AutoMinorLocator
 from scipy.signal import spectrogram as scipy_spectrogram
 
-# ── FIG A: ENSEMBLE DISAGREEMENT ─────────────────────────────────────────────
-ens_array = np.stack(ens_preds, axis=0)   # (3, N)
-ens_std   = ens_array.std(axis=0)         # (N,) per-sample disagreement
-ens_mean  = ens_array.mean(axis=0)        # sanity-check: should equal yp
+# ── Reuse style from main script ──────────────────────────────────────────────
+plt.rcParams.update({
+    "font.family":         "serif",
+    "font.serif":          ["Times New Roman", "DejaVu Serif"],
+    "font.size":           9,
+    "axes.labelsize":      9,
+    "axes.titlesize":      9,
+    "xtick.labelsize":     8,
+    "ytick.labelsize":     8,
+    "legend.fontsize":     8,
+    "figure.dpi":          150,
+    "axes.linewidth":      0.8,
+    "lines.linewidth":     1.0,
+    "xtick.direction":     "in",
+    "ytick.direction":     "in",
+    "xtick.minor.visible": True,
+    "ytick.minor.visible": True,
+})
 
-EXCERPT = 300
+PANEL_W  = 3.3
+PANEL_2C = 6.8
+OUTDIR   = "data"
+
+COLOR_ACT  = "#1a1a2e"
+COLOR_PRD  = "#e84545"
+COLOR_CMP  = "#2e86ab"
+COLOR_RES  = "#f18f01"
+COLOR_ENV  = "#6a4c93"
+COLOR_STD  = "#2ecc71"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FIG A: ENSEMBLE DISAGREEMENT
+# ══════════════════════════════════════════════════════════════════════════════
+# Per-sample std across ensemble members — measures model uncertainty.
+# High std = the three models disagree = low confidence region.
+# Overlaid against the true envelope to reveal whether uncertainty
+# tracks signal amplitude or something more interesting.
+# ══════════════════════════════════════════════════════════════════════════════
+
+ens_array = np.stack(ens_preds, axis=0)        # (3, N)
+ens_std   = ens_array.std(axis=0)              # (N,)   per-sample disagreement
+ens_mean  = ens_array.mean(axis=0)             # sanity-check: should equal yp
+
+# ── Panel layout: 3 rows ─────────────────────────────────────────────────────
+#   (a) time-series excerpt with uncertainty band
+#   (b) disagreement vs envelope amplitude scatter
+#   (c) disagreement vs relative error scatter
+# ─────────────────────────────────────────────────────────────────────────────
+
+EXCERPT = 300   # samples to show in time-series panel
 
 fig_a = plt.figure(figsize=(PANEL_2C, PANEL_2C * 0.95))
 gs_a  = gridspec.GridSpec(3, 1, figure=fig_a, hspace=0.52)
 
+# (a) Time-series excerpt ────────────────────────────────────────────────────
 ax0 = fig_a.add_subplot(gs_a[0])
 t   = np.arange(EXCERPT)
+
 ax0.fill_between(
     t,
     yp[:EXCERPT] - ens_std[:EXCERPT],
     yp[:EXCERPT] + ens_std[:EXCERPT],
     alpha=0.25, color=COLOR_STD, label="±1 std (ensemble)"
 )
-ax0.plot(t, yt[:EXCERPT], color=COLOR_ACT, lw=1.2, label="Actual target",    zorder=4)
-ax0.plot(t, yp[:EXCERPT], color=COLOR_PRD, lw=1.0, ls="--", label="Ensemble mean", zorder=3)
+ax0.plot(t, yt[:EXCERPT],  color=COLOR_ACT, lw=1.2, label="Actual target",    zorder=4)
+ax0.plot(t, yp[:EXCERPT],  color=COLOR_PRD, lw=1.0, ls="--", label="Ensemble mean", zorder=3)
+
 ax0.set_xlabel("Sample index")
 ax0.set_ylabel("Amplitude (a.u.)")
-ax0.set_title(f"(a) Ensemble prediction with uncertainty band (first {EXCERPT} test samples)")
+ax0.set_title(
+    f"(a) Ensemble prediction with uncertainty band "
+    f"(first {EXCERPT} test samples)"
+)
 ax0.legend(loc="upper right", framealpha=0.7, handlelength=1.8)
 ax0.xaxis.set_minor_locator(AutoMinorLocator())
 ax0.yaxis.set_minor_locator(AutoMinorLocator())
 
+# (b) Disagreement vs envelope amplitude ─────────────────────────────────────
 ax1 = fig_a.add_subplot(gs_a[1])
-ax1.scatter(env_true, ens_std, s=1.2, alpha=0.15, color=COLOR_ENV, linewidths=0, rasterized=True)
-si       = np.argsort(env_true)
+ax1.scatter(
+    env_true, ens_std,
+    s=1.2, alpha=0.15, color=COLOR_ENV, linewidths=0, rasterized=True
+)
+
+# moving average trend
+si   = np.argsort(env_true)
 roll_win = max(1, len(si) // 200)
 kernel   = np.ones(roll_win) / roll_win
 roll_std = np.convolve(ens_std[si], kernel, mode="valid")
 xmid     = env_true[si][roll_win // 2 : roll_win // 2 + len(roll_std)]
+
 ax1.plot(xmid, roll_std, color="k", lw=1.4, label="Moving avg.")
+
 corr_env = np.corrcoef(env_true, ens_std)[0, 1]
-ax1.text(0.97, 0.95, f"r = {corr_env:.3f}", transform=ax1.transAxes,
-         ha="right", va="top", fontsize=8, bbox=dict(fc="white", ec="0.7", pad=3, lw=0.6))
+ax1.text(
+    0.97, 0.95,
+    f"r = {corr_env:.3f}",
+    transform=ax1.transAxes, ha="right", va="top", fontsize=8,
+    bbox=dict(fc="white", ec="0.7", pad=3, lw=0.6)
+)
 ax1.set_xlabel("True envelope amplitude $A_{\\mathrm{true}}$ (a.u.)")
 ax1.set_ylabel("Ensemble std (a.u.)")
 ax1.set_title("(b) Disagreement vs. true envelope amplitude")
@@ -608,19 +690,32 @@ ax1.legend(loc="upper left", framealpha=0.7)
 ax1.xaxis.set_minor_locator(AutoMinorLocator())
 ax1.yaxis.set_minor_locator(AutoMinorLocator())
 
+# (c) Disagreement vs relative error ─────────────────────────────────────────
 ax2 = fig_a.add_subplot(gs_a[2])
+
 clip_pct = np.percentile(rel_err_pct, 99)
 mask     = rel_err_pct <= clip_pct
-ax2.scatter(ens_std[mask], rel_err_pct[mask], s=1.2, alpha=0.15, color=COLOR_RES, linewidths=0, rasterized=True)
-si2   = np.argsort(ens_std[mask])
-std_s = ens_std[mask][si2]
-err_s = rel_err_pct[mask][si2]
-roll2 = np.convolve(err_s, kernel, mode="valid")
-xmid2 = std_s[roll_win // 2 : roll_win // 2 + len(roll2)]
+
+ax2.scatter(
+    ens_std[mask], rel_err_pct[mask],
+    s=1.2, alpha=0.15, color=COLOR_RES, linewidths=0, rasterized=True
+)
+
+# moving average trend (sorted by std)
+si2      = np.argsort(ens_std[mask])
+std_s    = ens_std[mask][si2]
+err_s    = rel_err_pct[mask][si2]
+roll2    = np.convolve(err_s, kernel, mode="valid")
+xmid2    = std_s[roll_win // 2 : roll_win // 2 + len(roll2)]
 ax2.plot(xmid2, roll2, color="k", lw=1.4, label="Moving avg.")
+
 corr_err = np.corrcoef(ens_std[mask], rel_err_pct[mask])[0, 1]
-ax2.text(0.97, 0.95, f"r = {corr_err:.3f}", transform=ax2.transAxes,
-         ha="right", va="top", fontsize=8, bbox=dict(fc="white", ec="0.7", pad=3, lw=0.6))
+ax2.text(
+    0.97, 0.95,
+    f"r = {corr_err:.3f}",
+    transform=ax2.transAxes, ha="right", va="top", fontsize=8,
+    bbox=dict(fc="white", ec="0.7", pad=3, lw=0.6)
+)
 ax2.set_xlabel("Ensemble std (a.u.)")
 ax2.set_ylabel(f"Relative error (%, capped at {clip_pct:.1f})")
 ax2.set_title("(c) Disagreement vs. relative error — is uncertainty calibrated?")
@@ -633,13 +728,27 @@ fig_a.suptitle(
     fontsize=9, fontweight="bold", y=1.01
 )
 fig_a.tight_layout()
-fig_a.savefig(os.path.join(OUTDIR, "figA_ensemble_disagreement.png"), dpi=200, bbox_inches="tight")
+fig_a.savefig(f"{OUTDIR}/figA_ensemble_disagreement.png", dpi=200, bbox_inches="tight")
 print("Saved figA_ensemble_disagreement.png")
 
-# ── FIG B: SPECTROGRAM COMPARISON ────────────────────────────────────────────
-FS       = 1
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FIG B: SPECTROGRAM COMPARISON
+# ══════════════════════════════════════════════════════════════════════════════
+# Short-time Fourier transform (STFT) of the compressed input, actual target,
+# and ensemble reconstruction — displayed as log-power spectrograms.
+# A 4th panel shows the spectrogram of the residual (yt - yp) to directly
+# reveal which time-frequency bins carry the most reconstruction error.
+#
+# Parameters — tune to your signal's characteristics:
+#   FS      : sampling rate in Hz (set to 1 if unknown — axes show normalised freq)
+#   NPERSEG : FFT window length (controls time vs freq resolution trade-off)
+#   NOVERLAP: overlap between consecutive windows
+# ══════════════════════════════════════════════════════════════════════════════
+
+FS       = 1       # set to your actual sampling rate if known
 NPERSEG  = 256
-NOVERLAP = 224
+NOVERLAP = 224     # 87.5% overlap for smooth spectrogram
 
 def compute_spec(signal, fs, nperseg, noverlap):
     f, t, Sxx = scipy_spectrogram(
@@ -650,36 +759,43 @@ def compute_spec(signal, fs, nperseg, noverlap):
     Sxx_db = 10 * np.log10(Sxx + 1e-12)
     return f, t, Sxx_db
 
-f_cmp,  t_cmp,  S_cmp  = compute_spec(xc,      FS, NPERSEG, NOVERLAP)
-f_true, t_true, S_true = compute_spec(yt,      FS, NPERSEG, NOVERLAP)
-f_pred, t_pred, S_pred = compute_spec(yp,      FS, NPERSEG, NOVERLAP)
-f_res,  t_res,  S_res  = compute_spec(yt - yp, FS, NPERSEG, NOVERLAP)
 
+f_cmp,  t_cmp,  S_cmp  = compute_spec(xc,       FS, NPERSEG, NOVERLAP)
+f_true, t_true, S_true = compute_spec(yt,       FS, NPERSEG, NOVERLAP)
+f_pred, t_pred, S_pred = compute_spec(yp,       FS, NPERSEG, NOVERLAP)
+f_res,  t_res,  S_res  = compute_spec(yt - yp,  FS, NPERSEG, NOVERLAP)
+
+# Shared colour scale for the first three panels (input / target / prediction)
 vmin_sig = np.percentile(S_true, 5)
 vmax_sig = np.percentile(S_true, 99)
-vmin_res = np.percentile(S_res,  5)
-vmax_res = np.percentile(S_res,  99)
 
-freq_label = "Normalised frequency (cycles/sample)"
+# Separate scale for residual (usually much smaller dynamic range)
+vmin_res = np.percentile(S_res, 5)
+vmax_res = np.percentile(S_res, 99)
+
+freq_label = "Frequency (Hz)" if FS != 1 else "Normalised frequency (cycles/sample)"
 
 fig_b = plt.figure(figsize=(PANEL_2C, PANEL_2C * 0.85))
 gs_b  = gridspec.GridSpec(2, 2, figure=fig_b, hspace=0.42, wspace=0.35)
 
 spec_panels = [
-    (gs_b[0, 0], S_cmp,  t_cmp,  f_cmp,  "(a) Compressed input",  "Blues_r", vmin_sig, vmax_sig),
-    (gs_b[0, 1], S_true, t_true, f_true, "(b) Actual target",      "Blues_r", vmin_sig, vmax_sig),
-    (gs_b[1, 0], S_pred, t_pred, f_pred, "(c) Reconstruction",     "Blues_r", vmin_sig, vmax_sig),
-    (gs_b[1, 1], S_res,  t_res,  f_res,  "(d) Residual  y − ŷ",   "Oranges", vmin_res, vmax_res),
+    (gs_b[0, 0], S_cmp,  t_cmp,  f_cmp,  "(a) Compressed input",   "Blues_r",  vmin_sig, vmax_sig),
+    (gs_b[0, 1], S_true, t_true, f_true, "(b) Actual target",       "Blues_r",  vmin_sig, vmax_sig),
+    (gs_b[1, 0], S_pred, t_pred, f_pred, "(c) Reconstruction",      "Blues_r",  vmin_sig, vmax_sig),
+    (gs_b[1, 1], S_res,  t_res,  f_res,  "(d) Residual  y − ŷ",    "Oranges",  vmin_res, vmax_res),
 ]
 
 for spec, Sxx, t_ax, f_ax, title, cmap, vlo, vhi in spec_panels:
     ax = fig_b.add_subplot(spec)
-    im = ax.pcolormesh(t_ax, f_ax, Sxx, cmap=cmap, vmin=vlo, vmax=vhi,
-                       shading="gouraud", rasterized=True)
+    im = ax.pcolormesh(
+        t_ax, f_ax, Sxx,
+        cmap=cmap, vmin=vlo, vmax=vhi,
+        shading="gouraud", rasterized=True
+    )
     cb = fig_b.colorbar(im, ax=ax, pad=0.02)
     cb.set_label("dB", fontsize=7)
     cb.ax.tick_params(labelsize=6)
-    ax.set_xlabel("Time (samples)")
+    ax.set_xlabel("Time (samples)" if FS == 1 else "Time (s)")
     ax.set_ylabel(freq_label)
     ax.set_title(title)
     ax.xaxis.set_minor_locator(AutoMinorLocator())
@@ -688,99 +804,14 @@ for spec, Sxx, t_ax, f_ax, title, cmap, vlo, vhi in spec_panels:
 fig_b.suptitle(
     "Fig. B — Spectrogram comparison: compressed input, actual target, "
     "reconstruction, and residual\n"
-    f"(STFT: window = {NPERSEG} samples, overlap = {NOVERLAP} samples, Hann window)",
+    f"(STFT: window = {NPERSEG} samples, overlap = {NOVERLAP} samples, "
+    f"Hann window)",
     fontsize=9, fontweight="bold", y=1.02
 )
-fig_b.savefig(os.path.join(OUTDIR, "figB_spectrogram_comparison.png"), dpi=200, bbox_inches="tight")
+fig_b.savefig(f"{OUTDIR}/figB_spectrogram_comparison.png", dpi=200, bbox_inches="tight")
 print("Saved figB_spectrogram_comparison.png")
+print(f"Using data: {MAT_PATH}")
 plt.show()
-
-# ══════════════════════════════════════════════════════════════════════════════
-# EVALUATE ON NEW LOG DELAY DATA (10 waveforms, ~160,220 samples)
-# ══════════════════════════════════════════════════════════════════════════════
-# Copy files from network drive first — run this in MATLAB:
-#
-#   src = 'Y:\data\Accum_Data\2024_Antarctica_Ground2\compression_measurements3\';
-#   dst = 'C:\Users\s712a650\Desktop\project2.0\decompression\data\';
-#   for i = 1:10
-#       fname = sprintf('eager1_log_delay_%02d.mat', i);
-#       copyfile(fullfile(src, fname), fullfile(dst, fname));
-#       fprintf('Copied %s\n', fname);
-#   end
-# ══════════════════════════════════════════════════════════════════════════════
-
-log_delay_files = sorted(glob.glob("data/eager1_log_delay_*.mat"))
-print(f"\nFound {len(log_delay_files)} log delay files")
-
-if len(log_delay_files) > 0:
-    all_in, all_out = [], []
-    for f in log_delay_files:
-        d = loadmat(f)
-        all_in.append(d["train_input_real"].ravel())
-        all_out.append(d["train_output_real"].ravel())
-
-    raw_in_new  = np.concatenate(all_in)
-    raw_out_new = np.concatenate(all_out)
-    print(f"Total new test samples: {len(raw_in_new):,}")
-
-    # Build windowed features
-    X_new, y_new = make_window_data(raw_in_new, raw_out_new, WINDOW)
-
-    # IMPORTANT: normalize using ORIGINAL training stats, not new data stats
-    X_new_s = (X_new - data["X_train_raw"].mean(0, keepdims=True)) / \
-               (data["X_train_raw"].std(0,  keepdims=True) + 1e-8)
-
-    # Ensemble predict
-    new_preds = []
-    for mlp in ens_models:
-        yhat_s = mlp.predict(X_new_s).reshape(-1, 1)
-        new_preds.append(np.ravel(unscale(yhat_s, data)))
-
-    yp_new = np.mean(new_preds, axis=0)
-    yt_new = y_new.ravel()
-
-    m_new    = metrics(yt_new, yp_new)
-    env_new  = analytic_envelope(yt_new)
-    rel_new, _ = envelope_relative_error(
-        env_new, yt_new, yp_new, floor_frac=REL_FLOOR_FRAC
-    )
-
-    print("\n" + "=" * 65)
-    print("LOG DELAY TEST SET METRICS (all 10 waveforms)")
-    print("=" * 65)
-    print(f"  RMSE     : {m_new['RMSE']:>15,.2f}")
-    print(f"  MAE      : {m_new['MAE']:>15,.2f}")
-    print(f"  R²       : {m_new['R2']:>15.6f}")
-    print(f"  Env-MAPE : {100 * rel_new.mean():>14.2f}%")
-
-    # Per-waveform breakdown
-    print(f"\n  {'File':<30} {'RMSE':>10} {'R²':>10} {'Env-MAPE':>10}")
-    print("  " + "-" * 65)
-    offset = 0
-    for f, arr_in in zip(log_delay_files, all_in):
-        n     = len(arr_in)
-        yt_w  = yt_new[offset:offset + n]
-        yp_w  = yp_new[offset:offset + n]
-        m_w   = metrics(yt_w, yp_w)
-        env_w = analytic_envelope(yt_w)
-        rel_w, _ = envelope_relative_error(env_w, yt_w, yp_w, floor_frac=REL_FLOOR_FRAC)
-        fname = os.path.basename(f)
-        print(
-            f"  {fname:<30} "
-            f"{m_w['RMSE']:>10,.2f} "
-            f"{m_w['R2']:>10.6f} "
-            f"{100 * rel_w.mean():>9.2f}%"
-        )
-        offset += n
-
-else:
-    print("No log delay files found — copy them to the data/ folder first.")
-    print("  Run in MATLAB:")
-    print("  src = 'Y:\\data\\Accum_Data\\2024_Antarctica_Ground2\\compression_measurements3\\';")
-    print("  dst = 'C:\\Users\\s712a650\\Desktop\\project2.0\\decompression\\data\\';")
-    print("  for i = 1:10")
-    print("      fname = sprintf('eager1_log_delay_%02d.mat', i);")
-    print("      copyfile(fullfile(src, fname), fullfile(dst, fname));")
-    print("  end")
-
-print("\nAll done.")
+print("\nDone.")
+print("  data/figA_ensemble_disagreement.png")
+print("  data/figB_spectrogram_comparison.png")

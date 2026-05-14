@@ -6,10 +6,10 @@ if 0
   %% COREGISTRATION
   % Load chirp output (20250529_135329_config)
 
-  chirp_output_fn = 'digrx0/20250529_135329_accum3_digrx0_0000.dat';
+  chirp_output_fn = 'digrx0/20250529_135329_acc_0000.dat';
 
   [hdr,data,hdr_debug] = basic_load_arena(chirp_output_fn);
-
+um3_digrx0
   data{4} = data{4}(:,2:end);
   data{4} = mean(data{4},2);
 
