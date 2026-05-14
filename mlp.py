@@ -225,6 +225,22 @@ print(f"  MAE      : {m['MAE']:>15,.2f}")
 print(f"  R²       : {m['R2']:>15.6f}")
 print(f"  Env-MAPE : {mape_env:>14.2f}%")
 
+# Sensitivity analysis for REL_FLOOR_FRAC
+print("\n" + "=" * 65)
+print("SENSITIVITY ANALYSIS: Relative Error Floor")
+print("=" * 65)
+floor_values = [0.005, 0.01, 0.02, 0.05]
+print(f"  {'Floor %':<10} {'MAPE':<10} {'MdAPE':<10} {'P95':<10} {'P99':<10}")
+print("  " + "-" * 50)
+for floor_frac in floor_values:
+    rel_test, _ = envelope_relative_error(env_true, yt, yp, floor_frac=floor_frac)
+    rel_test_pct = 100 * rel_test
+    print(f"  {floor_frac*100:>6.2f}%    "
+          f"{rel_test_pct.mean():>8.2f}% "
+          f"{np.median(rel_test_pct):>8.2f}% "
+          f"{np.percentile(rel_test_pct, 95):>8.2f}% "
+          f"{np.percentile(rel_test_pct, 99):>8.2f}%")
+
 # ══════════════════════════════════════════════════════════════════════════════
 # FIGURE 1: Predicted vs. Actual Envelope
 # ══════════════════════════════════════════════════════════════════════════════
@@ -300,9 +316,10 @@ print("Saved: fig2_overlay_excerpts.png")
 # ══════════════════════════════════════════════════════════════════════════════
 # FIGURE 2b: Expanded View (showing non-linearity)
 # ══════════════════════════════════════════════════════════════════════════════
-# Use the Q1 (low amplitude) segment to clearly show non-linear behavior
+# Scale the received input by 20x to show it's NOT just a linear scaling
+# If reconstruction were linear, scaled input would match the target
 expand_start = starts[0]
-expand_len = 40  # smaller window for detail
+expand_len = 40
 
 fig2b, ax = plt.subplots(figsize=(PANEL_W, PANEL_W * 0.75))
 t_expand = np.arange(expand_len)
@@ -311,21 +328,27 @@ xc_exp = xc[expand_start:expand_start + expand_len]
 yt_exp = yt[expand_start:expand_start + expand_len]
 yp_exp = yp[expand_start:expand_start + expand_len]
 
+# Scale the input to approximately match target amplitude range
+scale_factor = 100
+xc_scaled = xc_exp * scale_factor
+
 ax.plot(t_expand, xc_exp, color=COLOR_CMP, lw=1.2, ls=":", label="Received input", marker='o', ms=3, zorder=2)
+ax.plot(t_expand, xc_scaled, color='gray', lw=1.0, ls="--", alpha=0.6, label=f"Input × {scale_factor} (linear hypothesis)", marker='x', ms=2, zorder=1)
 ax.plot(t_expand, yt_exp, color=COLOR_ACT, lw=1.2, label="Reference target", marker='s', ms=3, zorder=4)
 ax.plot(t_expand, yp_exp, color=COLOR_PRD, lw=1.2, ls="--", label="Reconstruction", marker='^', ms=3, zorder=5)
 
-# Highlight non-linear behavior with annotations
+# Annotate to show the difference
 mid_pt = expand_len // 2
-ax.annotate('', xy=(mid_pt, yt_exp[mid_pt]), xytext=(mid_pt, xc_exp[mid_pt]),
-            arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5, alpha=0.6))
-ax.text(mid_pt + 2, (yt_exp[mid_pt] + xc_exp[mid_pt]) / 2, 
-        'Non-linear\ntransform', fontsize=7, color='gray')
+ax.annotate('', xy=(mid_pt, yt_exp[mid_pt]), xytext=(mid_pt, xc_scaled[mid_pt]),
+            arrowprops=dict(arrowstyle='<->', color='red', lw=1.5, alpha=0.7))
+ax.text(mid_pt + 2, (yt_exp[mid_pt] + xc_scaled[mid_pt]) / 2, 
+        'Non-linear\ngap', fontsize=7, color='red', fontweight='bold')
 
 ax.set_xlabel("Sample index")
 ax.set_ylabel("Amplitude (a.u.)")
-ax.set_title("Fig. 2b — Expanded view showing non-linear reconstruction\n(Low amplitude region, 40 samples)")
-ax.legend(loc="upper right", framealpha=0.7, fontsize=7)
+ax.set_title(f"Fig. 2b — Demonstrating non-linear reconstruction\n"
+             f"(Scaled input × {scale_factor} does not match target)")
+ax.legend(loc="upper right", framealpha=0.7, fontsize=6.5)
 ax.xaxis.set_minor_locator(AutoMinorLocator())
 ax.yaxis.set_minor_locator(AutoMinorLocator())
 ax.grid(True, alpha=0.2, linestyle=':', linewidth=0.5)
@@ -426,6 +449,46 @@ print(f"{'='*65}")
 print(f"Found {len(log_delay_files)} log delay files")
 
 if len(log_delay_files) > 0:
+    # ══════════════════════════════════════════════════════════════════════════
+    # WAVEFORM COMPARISON: How different are the 10 waveforms?
+    # ══════════════════════════════════════════════════════════════════════════
+    print(f"\n{'='*65}")
+    print("WAVEFORM STATISTICAL COMPARISON")
+    print(f"{'='*65}")
+    print(f"  {'File':<30} {'Mean':>10} {'Std':>10} {'Min':>10} {'Max':>10} {'Env Mean':>10}")
+    print("  " + "-" * 85)
+    
+    waveform_stats = []
+    for f in log_delay_files:
+        d = loadmat(f)
+        sig_in = d["train_input_real"].ravel()
+        sig_out = d["train_output_real"].ravel()
+        env = analytic_envelope(sig_out)
+        
+        fname = os.path.basename(f)
+        print(f"  {fname:<30} "
+              f"{sig_out.mean():>10,.2f} "
+              f"{sig_out.std():>10,.2f} "
+              f"{sig_out.min():>10,.2f} "
+              f"{sig_out.max():>10,.2f} "
+              f"{env.mean():>10,.2f}")
+        
+        waveform_stats.append({
+            'file': fname,
+            'mean': sig_out.mean(),
+            'std': sig_out.std(),
+            'min': sig_out.min(),
+            'max': sig_out.max(),
+            'env_mean': env.mean()
+        })
+    
+    # Summary statistics across waveforms
+    df_stats = pd.DataFrame(waveform_stats)
+    print("\n  Coefficient of Variation across waveforms:")
+    print(f"    Mean:     {df_stats['mean'].std() / abs(df_stats['mean'].mean()) * 100:.2f}%")
+    print(f"    Std:      {df_stats['std'].std() / df_stats['std'].mean() * 100:.2f}%")
+    print(f"    Env Mean: {df_stats['env_mean'].std() / df_stats['env_mean'].mean() * 100:.2f}%")
+    print(f"{'='*65}\n")
     # Concatenate all 10 waveforms
     all_in, all_out = [], []
     for f in log_delay_files:
@@ -533,6 +596,90 @@ else:
     print("      fname = sprintf('eager1_log_delay_%02d.mat', i);")
     print("      copyfile(fullfile(src, fname), fullfile(dst, fname));")
     print("  end")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CROSS-VALIDATION: 5-Fold on individual waveforms
+# ══════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 65)
+print("5-FOLD CROSS-VALIDATION (by waveform)")
+print("=" * 65)
+print("Training 5 folds, each using 8 waveforms for train, 2 for test...")
+
+if len(log_delay_files) == 10:
+    from sklearn.model_selection import KFold
+    
+    # Each fold: 8 waveforms train, 2 waveforms test
+    fold_results = []
+    kf = KFold(n_splits=5, shuffle=True, random_state=42)
+    
+    waveform_arrays = [(all_in[i], all_out[i]) for i in range(10)]
+    
+    for fold_idx, (train_idx, test_idx) in enumerate(kf.split(waveform_arrays)):
+        print(f"\n  Fold {fold_idx + 1}/5: Train on waveforms {train_idx + 1}, Test on waveforms {test_idx + 1}")
+        
+        # Concatenate training waveforms
+        train_in = np.concatenate([waveform_arrays[i][0] for i in train_idx])
+        train_out = np.concatenate([waveform_arrays[i][1] for i in train_idx])
+        
+        # Concatenate test waveforms
+        test_in = np.concatenate([waveform_arrays[i][0] for i in test_idx])
+        test_out = np.concatenate([waveform_arrays[i][1] for i in test_idx])
+        
+        # Create windowed data
+        X_train_fold, y_train_fold = make_window_data(train_in, train_out, WINDOW)
+        X_test_fold, y_test_fold = make_window_data(test_in, test_out, WINDOW)
+        
+        # Normalize
+        X_mean_fold = X_train_fold.mean(0, keepdims=True)
+        X_std_fold = X_train_fold.std(0, keepdims=True) + 1e-8
+        y_mean_fold = y_train_fold.mean(0, keepdims=True)
+        y_std_fold = y_train_fold.std(0, keepdims=True) + 1e-8
+        
+        X_train_s = (X_train_fold - X_mean_fold) / X_std_fold
+        y_train_s = (y_train_fold - y_mean_fold) / y_std_fold
+        X_test_s = (X_test_fold - X_mean_fold) / X_std_fold
+        
+        # Train ensemble for this fold
+        fold_preds = []
+        for arch in TOP_ARCHS:
+            mlp = MLPRegressor(**SHARED_PARAMS, hidden_layer_sizes=arch, random_state=42)
+            mlp.fit(X_train_s, np.ravel(y_train_s))
+            yhat_s = mlp.predict(X_test_s).reshape(-1, 1)
+            yhat = np.ravel(yhat_s * y_std_fold + y_mean_fold)
+            fold_preds.append(yhat)
+        
+        # Ensemble prediction
+        yp_fold = np.mean(fold_preds, axis=0)
+        yt_fold = y_test_fold.ravel()
+        
+        # Metrics
+        m_fold = metrics(yt_fold, yp_fold)
+        env_fold = analytic_envelope(yt_fold)
+        rel_fold, _ = envelope_relative_error(env_fold, yt_fold, yp_fold, floor_frac=REL_FLOOR_FRAC)
+        
+        fold_results.append({
+            'fold': fold_idx + 1,
+            'rmse': m_fold['RMSE'],
+            'mae': m_fold['MAE'],
+            'r2': m_fold['R2'],
+            'env_mape': 100 * rel_fold.mean()
+        })
+        
+        print(f"    RMSE: {m_fold['RMSE']:,.2f}, R²: {m_fold['R2']:.6f}, Env-MAPE: {100*rel_fold.mean():.2f}%")
+    
+    # Summary statistics
+    df_cv = pd.DataFrame(fold_results)
+    print("\n" + "=" * 65)
+    print("CROSS-VALIDATION SUMMARY")
+    print("=" * 65)
+    print(f"  RMSE:     {df_cv['rmse'].mean():>10,.2f} ± {df_cv['rmse'].std():>8,.2f}")
+    print(f"  MAE:      {df_cv['mae'].mean():>10,.2f} ± {df_cv['mae'].std():>8,.2f}")
+    print(f"  R²:       {df_cv['r2'].mean():>10.6f} ± {df_cv['r2'].std():>8.6f}")
+    print(f"  Env-MAPE: {df_cv['env_mape'].mean():>9.2f}% ± {df_cv['env_mape'].std():>7.2f}%")
+    print("=" * 65)
+
+else:
+    print("Skipping cross-validation (need all 10 waveform files)")
 
 print("\n" + "="*65)
 print("DATA STRUCTURE EXPLANATION")
