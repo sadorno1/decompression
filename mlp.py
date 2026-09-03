@@ -11,9 +11,6 @@ from numpy.lib.stride_tricks import sliding_window_view
 from sklearn.neural_network import MLPRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
-# ══════════════════════════════════════════════════════════════════════════════
-# CONFIGURATION
-# ══════════════════════════════════════════════════════════════════════════════
 MAT_PATH = "data/compression_data_logdelay.mat"
 WINDOW   = 16
 
@@ -39,9 +36,6 @@ EXCERPT_WIN = 50
 OUTDIR = "data/logdelay_results"
 os.makedirs(OUTDIR, exist_ok=True)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# JOURNAL STYLE
-# ══════════════════════════════════════════════════════════════════════════════
 plt.rcParams.update({
     "font.family":         "serif",
     "font.serif":          ["Times New Roman", "DejaVu Serif"],
@@ -68,9 +62,7 @@ COLOR_PRD = "#e84545"
 COLOR_CMP = "#2e86ab"
 COLOR_RES = "#f18f01"
 
-# ══════════════════════════════════════════════════════════════════════════════
-# HELPER FUNCTIONS
-# ══════════════════════════════════════════════════════════════════════════════
+
 def make_window_data(signal_in, signal_out, window):
     a = signal_in.ravel()
     y = signal_out[:len(a)].reshape(-1, 1)
@@ -179,7 +171,6 @@ xc  = np.ravel(data["cmp_test"])
 res = yt - yp
 m   = metrics(yt, yp)
 
-# ── Per-model metrics (for Table 1) ──────────────────────────────────────────
 env_true = analytic_envelope(yt)
 env_pred = analytic_envelope(yp)
 rel_err_env, rel_floor = envelope_relative_error(
@@ -205,7 +196,7 @@ print(f"  MAE      : {m['MAE']:>15,.2f}")
 print(f"  R²       : {m['R2']:>15.6f}")
 print(f"  Env-MAPE : {mape_env:>14.2f}%")
 
-# ── Sensitivity analysis ──────────────────────────────────────────────────────
+# ── Sensitivity analysis ─────────────────────────────────────────────────────
 print("\n" + "=" * 65)
 print("SENSITIVITY ANALYSIS: Relative Error Floor")
 print("=" * 65)
@@ -250,21 +241,133 @@ print("  " + "-" * 48)
 for b in bin_stats:
     print(f"  {b['bin']:<20} {b['mape']:>7.2f}% {b['mdape']:>7.2f}% {b['p95']:>7.2f}%")
 
-# ── Linear baseline (Wiener / Ridge) ─────────────────────────────────────
-from sklearn.linear_model import Ridge
-ridge = Ridge(alpha=1.0)
-ridge.fit(data["X_train"], np.ravel(data["y_train"]))
-yhat_ridge_s = ridge.predict(data["X_test"]).reshape(-1, 1)
-yhat_ridge = np.ravel(unscale(yhat_ridge_s, data))
-m_ridge = metrics(yt, yhat_ridge)
-env_ridge_true = analytic_envelope(yt)
-rel_ridge, _ = envelope_relative_error(
-    env_ridge_true, yt, yhat_ridge, floor_frac=REL_FLOOR_FRAC
-)
-mape_ridge = 100 * rel_ridge.mean()
-print(f"\n  Ridge baseline:  RMSE={m_ridge['RMSE']:,.2f}  "
-      f"MAE={m_ridge['MAE']:,.2f}  R2={m_ridge['R2']:.6f}  "
-      f"Env-MAPE={mape_ridge:.2f}%")
+# ══════════════════════════════════════════════════════════════════════════════
+# SINGLE-SAMPLE FITTED INVERSE BASELINE
+# ══════════════════════════════════════════════════════════════════════════════
+# Plot all (input, output) data pairs. Fit a reasonable invertible function.
+# Use that function to invert the data. Measure performance.
+#
+# xc[n] -> yt[n], one sample at a time, no window.
+# Normalize inputs to [-1, 1] so polynomial powers stay well-conditioned.
+# Try odd degrees 1, 3, 5, 7, 9, 11 and pick whatever works best.
+
+print("\n" + "=" * 65)
+print("SINGLE-SAMPLE FITTED INVERSE BASELINE")
+print("=" * 65)
+
+sd = loadmat(MAT_PATH)
+raw_in_full  = sd["train_input_real"].ravel()
+raw_out_full = sd["train_output_real"].ravel()
+N_full = min(len(raw_in_full), len(raw_out_full))
+
+n_dev = N_full // 2
+n_train_ss = int(0.8 * n_dev)
+
+xc_train_ss = raw_in_full[:n_train_ss]
+yt_train_ss = raw_out_full[:n_train_ss]
+xc_test_ss  = raw_in_full[n_dev:N_full]
+yt_test_ss  = raw_out_full[n_dev:N_full]
+
+xc_scale = np.max(np.abs(xc_train_ss))
+xc_train_n = xc_train_ss / xc_scale
+xc_test_n  = xc_test_ss / xc_scale
+
+env_ss_true = analytic_envelope(yt_test_ss)
+
+print(f"  Input normalization: divide by {xc_scale:.2f}")
+print(f"\n  {'Degree':<10} {'RMSE':>10} {'R²':>12} {'Env-MAPE':>10}")
+print("  " + "-" * 45)
+
+best_deg = None
+best_r2  = -np.inf
+best_coeffs = None
+best_powers = None
+sweep_results = []
+
+for max_deg in [1, 3, 5, 7, 9, 11]:
+    powers = np.arange(1, max_deg + 1, 2)
+    A_tr = np.column_stack([xc_train_n ** p for p in powers])
+    A_te = np.column_stack([xc_test_n ** p  for p in powers])
+    c, _, _, _ = np.linalg.lstsq(A_tr, yt_train_ss, rcond=None)
+    yhat = A_te @ c
+    m_d = metrics(yt_test_ss, yhat)
+    rel_d, _ = envelope_relative_error(env_ss_true, yt_test_ss, yhat, floor_frac=REL_FLOOR_FRAC)
+    mape_d = 100 * rel_d.mean()
+    print(f"  {max_deg:<10} {m_d['RMSE']:>10,.2f} {m_d['R2']:>12.6f} {mape_d:>9.2f}%")
+    sweep_results.append({
+        'deg': max_deg, 'rmse': m_d['RMSE'], 'r2': m_d['R2'],
+        'mape': mape_d, 'coeffs': c, 'powers': powers
+    })
+    if m_d['R2'] > best_r2:
+        best_r2 = m_d['R2']
+        best_deg = max_deg
+        best_coeffs = c
+        best_powers = powers
+
+A_te_best = np.column_stack([xc_test_n ** p for p in best_powers])
+yhat_ss = A_te_best @ best_coeffs
+m_ss = metrics(yt_test_ss, yhat_ss)
+rel_ss, _ = envelope_relative_error(env_ss_true, yt_test_ss, yhat_ss, floor_frac=REL_FLOOR_FRAC)
+mape_ss = 100 * rel_ss.mean()
+
+print(f"\n  Best degree: {best_deg} (R² = {best_r2:.6f})")
+print(f"  Coefficients (on normalized input):")
+for p, c in zip(best_powers, best_coeffs):
+    print(f"    x^{p}: {c:.4f}")
+
+print(f"\n  --- Comparison ---")
+print(f"  {'Method':<35} {'RMSE':>10} {'R²':>12} {'Env-MAPE':>10}")
+print(f"  {'-'*70}")
+print(f"  {'Fitted inverse (odd poly, deg ' + str(best_deg) + ')':<35} {m_ss['RMSE']:>10,.2f} {m_ss['R2']:>12.6f} {mape_ss:>9.2f}%")
+print(f"  {'MLP ensemble (window-16)':<35} {m['RMSE']:>10,.2f} {m['R2']:>12.6f} {mape_env:>9.2f}%")
+
+# ── Figure: transfer characteristic + reconstruction comparison ───────────
+fig_ss, axes_ss = plt.subplots(1, 2, figsize=(PANEL_2C, PANEL_W))
+
+ax = axes_ss[0]
+rng = np.random.default_rng(42)
+sub = rng.choice(len(xc_train_ss), size=min(50000, len(xc_train_ss)), replace=False)
+ax.scatter(xc_train_ss[sub], yt_train_ss[sub],
+           s=0.5, alpha=0.08, color=COLOR_CMP, linewidths=0, rasterized=True,
+           label="Data pairs")
+
+x_plot_n = np.linspace(-1, 1, 500)
+x_plot   = x_plot_n * xc_scale
+
+lin_res = [r for r in sweep_results if r['deg'] == 1][0]
+ax.plot(x_plot, (x_plot_n.reshape(-1, 1)) @ lin_res['coeffs'],
+        color=COLOR_RES, lw=1.5, label=f"Linear (R²={lin_res['r2']:.3f})")
+
+A_plot_best = np.column_stack([x_plot_n ** p for p in best_powers])
+ax.plot(x_plot, A_plot_best @ best_coeffs, color=COLOR_PRD, lw=1.5, ls="--",
+        label=f"Odd poly deg {best_deg} (R²={best_r2:.3f})")
+
+ax.set_xlabel("Received sample $x[n]$ (a.u.)")
+ax.set_ylabel("Reference sample $y[n]$ (a.u.)")
+ax.set_title("(a) Single-sample transfer characteristic")
+ax.legend(fontsize=7, framealpha=0.7, loc="upper left")
+ax.xaxis.set_minor_locator(AutoMinorLocator())
+ax.yaxis.set_minor_locator(AutoMinorLocator())
+
+ax = axes_ss[1]
+exc = 200
+ax.plot(np.arange(exc), yt_test_ss[:exc], color=COLOR_ACT, lw=1.0, label="Reference")
+ax.plot(np.arange(exc), yhat_ss[:exc], color=COLOR_RES, lw=1.0, ls=":",
+        label=f"Fitted inverse (deg {best_deg})")
+ax.plot(np.arange(exc), yp[:exc], color=COLOR_PRD, lw=1.0, ls="--",
+        label="MLP ensemble")
+ax.set_xlabel("Sample index")
+ax.set_ylabel("Amplitude (a.u.)")
+ax.set_title("(b) Reconstruction comparison (excerpt)")
+ax.legend(fontsize=7, framealpha=0.7)
+ax.xaxis.set_minor_locator(AutoMinorLocator())
+ax.yaxis.set_minor_locator(AutoMinorLocator())
+
+fig_ss.suptitle("Single-sample fitted inverse baseline",
+                fontsize=9, fontweight="bold")
+fig_ss.tight_layout()
+fig_ss.savefig(os.path.join(OUTDIR, "fig_single_sample_baseline.png"), dpi=200, bbox_inches="tight")
+print("\nSaved: fig_single_sample_baseline.png")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FIGURE 1: Predicted vs. Actual Envelope
@@ -292,19 +395,21 @@ starts = [
 ]
 qlabels = [row[2] for row in qbins]
 
+global_scale = np.dot(xc, yt) / (np.dot(xc, xc) + 1e-8)
+
 fig2 = plt.figure(figsize=(PANEL_2C, PANEL_2C * 0.72))
-gs = gridspec.GridSpec(2, 2, figure=fig2, hspace=0.48, wspace=0.38)
+gs = gridspec.GridSpec(2, 2, figure=fig2, hspace=0.55, wspace=0.42)
 
 for idx, (start, qlabel) in enumerate(zip(starts, qlabels)):
     ax = fig2.add_subplot(gs[idx // 2, idx % 2])
     t = np.arange(EXCERPT_WIN)
-    yt_seg = yt[start:start + EXCERPT_WIN]
-    xc_seg_raw = xc[start:start + EXCERPT_WIN]
-    scale_x = (np.mean(np.abs(yt_seg)) / (np.mean(np.abs(xc_seg_raw)) + 1e-8))
-    xc_seg = xc_seg_raw * scale_x
-    yp_seg = yp[start:start + EXCERPT_WIN]
 
-    ax.plot(t, xc_seg, color=COLOR_CMP, lw=1.1, ls=":", label=f"Received input scaled by {scale_x:.2f}", zorder=2)
+    yt_seg = yt[start:start + EXCERPT_WIN]
+    yp_seg = yp[start:start + EXCERPT_WIN]
+    xc_seg = xc[start:start + EXCERPT_WIN] * global_scale
+
+    ax.plot(t, xc_seg, color=COLOR_CMP, lw=1.1, ls=":",
+            label=f"Scaled input ($\\times${global_scale:.1f})", zorder=2)
     ax.plot(t, yt_seg, color=COLOR_ACT, lw=1.2, label="Reference target", zorder=4)
     ax.plot(t, yp_seg, color=COLOR_PRD, lw=1.2, ls="--", label="Reconstruction", zorder=5)
     ax.fill_between(t, yt_seg, yp_seg, alpha=0.12, color=COLOR_PRD, zorder=3)
@@ -318,22 +423,19 @@ for idx, (start, qlabel) in enumerate(zip(starts, qlabels)):
 
     letter = ["(a)", "(b)", "(c)", "(d)"][idx]
     ax.set_title(
-        f"{letter} {qlabel}\n"
-        f"RMSE = {local_rmse:,.0f}, Env-MAPE = {local_mape:.2f}%",
-        pad=4
+        f"{letter} {qlabel}\nRMSE = {local_rmse:,.0f}, Env-MAPE = {local_mape:.2f}%",
+        pad=4, fontsize=9
     )
-    ax.set_xlabel("Sample index")
-    ax.set_ylabel("Amplitude (a.u.)")
+    ax.set_xlabel("Sample index", fontsize=9)
+    ax.set_ylabel("Amplitude (a.u.)", fontsize=9)
+    ax.tick_params(axis='both', labelsize=8)
     ax.xaxis.set_minor_locator(AutoMinorLocator())
     ax.yaxis.set_minor_locator(AutoMinorLocator())
 
     if idx == 0:
-        ax.legend(loc="upper right", framealpha=0.7, handlelength=1.8, fontsize=7)
+        ax.legend(loc="upper right", framealpha=0.7, handlelength=1.8, fontsize=8)
 
-fig2.suptitle(
-    "Fig. 2 — Overlay excerpts across true-envelope amplitude quartiles",
-    fontsize=9, fontweight="bold", y=1.01
-)
+# suptitle removed
 fig2.tight_layout()
 fig2.savefig(os.path.join(OUTDIR, "fig2_overlay_excerpts.png"), dpi=200, bbox_inches="tight")
 print("Saved: fig2_overlay_excerpts.png")
@@ -341,14 +443,13 @@ print("Saved: fig2_overlay_excerpts.png")
 # ══════════════════════════════════════════════════════════════════════════════
 # FIGURE 3: Relative Error
 # ══════════════════════════════════════════════════════════════════════════════
-fig3, axes = plt.subplots(1, 3, figsize=(PANEL_2C, PANEL_2C * 0.48))
-fig3.suptitle(
-    r"Fig. 3 — Envelope-normalized relative error: "
-    r"$|y_{\mathrm{pred}} - y_{\mathrm{true}}|\,/\,\max(A_{\mathrm{true}},\,\varepsilon)$",
-    fontsize=9, fontweight="bold"
-)
+fig3, axes = plt.subplots(1, 3, figsize=(PANEL_2C, PANEL_2C * 0.50))
+# suptitle removed
 
-# (a) Relative error vs true envelope amplitude — scatter + moving avg
+AXIS_FONTSIZE  = 9
+TICK_FONTSIZE  = 8
+LABEL_FONTSIZE = 8
+
 ax = axes[0]
 ax.scatter(env_true, rel_err_pct, s=1.0, alpha=0.12, color=COLOR_RES,
            linewidths=0, rasterized=True)
@@ -363,49 +464,50 @@ ax.plot(xmid, roll, color="k", lw=1.6, label="Moving avg.", zorder=5)
 ax.axvline(rel_floor, color=COLOR_ACT, lw=1.2, ls="--",
            label="Amplitude floor $\\varepsilon$")
 ax.set_ylim(0, np.percentile(rel_err_pct, 99.5))
-ax.set_xlabel("True envelope amplitude $A_{\\mathrm{true}}$ (a.u.)")
-ax.set_ylabel("Relative error (%)")
-ax.set_title("(a) Relative error vs. envelope amplitude")
-ax.legend(fontsize=7, framealpha=0.7)
+ax.set_xlabel("True envelope amplitude $A_{\\mathrm{true}}$ (a.u.)", fontsize=AXIS_FONTSIZE)
+ax.set_ylabel("Relative error (%)", fontsize=AXIS_FONTSIZE)
+ax.tick_params(axis='both', labelsize=TICK_FONTSIZE)
+ax.legend(fontsize=LABEL_FONTSIZE, framealpha=0.7)
 ax.xaxis.set_minor_locator(AutoMinorLocator())
 ax.yaxis.set_minor_locator(AutoMinorLocator())
+ax.set_title("(a) Relative error vs. envelope amplitude", fontsize=AXIS_FONTSIZE, pad=4, loc='center', y=-0.28)
 
-# (b) Distribution
 ax = axes[1]
 clip_hi = min(100, np.percentile(rel_err_pct, 99.5))
 ax.hist(np.clip(rel_err_pct, 0, clip_hi), bins=100, color=COLOR_CMP, edgecolor="none", alpha=0.85, density=True)
 mdape_env = np.median(rel_err_pct)
 ax.axvline(mape_env,  color=COLOR_PRD, lw=1.2, ls="-",  label=f"MAPE = {mape_env:.1f}%")
 ax.axvline(mdape_env, color=COLOR_RES, lw=1.2, ls="--", label=f"Median = {mdape_env:.1f}%")
-ax.set_xlabel(f"Relative error (%, capped at {clip_hi:.1f})")
-ax.set_ylabel("Probability density")
-ax.set_title("(b) Distribution")
-ax.legend(fontsize=7, framealpha=0.7)
+ax.set_xlabel(f"Relative error (%, capped at {clip_hi:.1f})", fontsize=AXIS_FONTSIZE)
+ax.set_ylabel("Probability density", fontsize=AXIS_FONTSIZE)
+ax.tick_params(axis='both', labelsize=TICK_FONTSIZE)
+ax.legend(fontsize=LABEL_FONTSIZE, framealpha=0.7)
 ax.xaxis.set_minor_locator(AutoMinorLocator())
 ax.yaxis.set_minor_locator(AutoMinorLocator())
+ax.set_title("(b) Distribution", fontsize=AXIS_FONTSIZE, pad=4, loc='center', y=-0.28)
 
-# (c) Quartile bars
 ax = axes[2]
 x_pos = np.arange(len(bin_stats))
 w = 0.38
 b1 = ax.bar(x_pos - w / 2, [b["mape"]  for b in bin_stats], w, color=COLOR_CMP, alpha=0.85, label="MAPE")
 b2 = ax.bar(x_pos + w / 2, [b["mdape"] for b in bin_stats], w, color=COLOR_RES, alpha=0.85, label="Median APE")
 ax.set_xticks(x_pos)
-ax.set_xticklabels([b["bin"].split("(")[0].strip() for b in bin_stats], fontsize=7)
-ax.set_ylabel("Relative error (%)")
-ax.set_title("(c) By envelope quartile")
-ax.legend(fontsize=7, framealpha=0.7)
+ax.set_xticklabels([b["bin"].split("(")[0].strip() for b in bin_stats], fontsize=TICK_FONTSIZE)
+ax.set_ylabel("Relative error (%)", fontsize=AXIS_FONTSIZE)
+ax.tick_params(axis='both', labelsize=TICK_FONTSIZE)
+ax.legend(fontsize=LABEL_FONTSIZE, framealpha=0.7)
 ax.yaxis.set_minor_locator(AutoMinorLocator())
-# Add headroom above tallest bar so labels aren't clipped
 all_heights = [b["mape"] for b in bin_stats] + [b["mdape"] for b in bin_stats]
-ax.set_ylim(0, max(all_heights) * 1.22)
+ax.set_ylim(0, max(all_heights) * 1.28)  # extra headroom for bottom title
 for bar in list(b1) + list(b2):
     h = bar.get_height()
     cx = bar.get_x() + bar.get_width() / 2 + 0.03
     ax.text(cx, h + max(all_heights) * 0.02,
             f"{h:.1f}%", ha="center", va="bottom", fontsize=6.5)
+ax.set_title("(c) By envelope quartile", fontsize=AXIS_FONTSIZE, pad=4, loc='center', y=-0.28)
 
 fig3.tight_layout()
+fig3.subplots_adjust(bottom=0.22)  # make room for bottom titles
 fig3.savefig(os.path.join(OUTDIR, "fig3_relative_error.png"), dpi=200, bbox_inches="tight")
 print("Saved: fig3_relative_error.png")
 
@@ -424,7 +526,6 @@ print(f"{'='*65}")
 print(f"Found {len(log_delay_files)} log delay files")
 
 if len(log_delay_files) > 0:
-    # Waveform statistics
     print(f"\n{'='*65}")
     print("WAVEFORM STATISTICAL COMPARISON")
     print(f"{'='*65}")
@@ -459,7 +560,6 @@ if len(log_delay_files) > 0:
     print(f"    Env Mean: {df_stats['env_mean'].std() / df_stats['env_mean'].mean() * 100:.2f}%")
     print(f"{'='*65}\n")
 
-    # Normalisation stats from original training set
     sd = loadmat(MAT_PATH)
     raw_in_orig  = sd["train_input_real"].ravel()
     raw_out_orig = sd["train_output_real"].ravel()
@@ -471,7 +571,6 @@ if len(log_delay_files) > 0:
     X_mean_orig = X_train_raw_orig.mean(0, keepdims=True)
     X_std_orig  = X_train_raw_orig.std(0, keepdims=True) + 1e-8
 
-    # Build windowed features for all 10 waveforms
     raw_in_all  = np.concatenate(all_in)
     raw_out_all = np.concatenate(all_out)
     X_new, y_new = make_window_data(raw_in_all, raw_out_all, WINDOW)
